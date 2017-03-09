@@ -13,7 +13,14 @@
 #include "ngx_rtmp_live_module.h"
 #include "ngx_rtmp_play_module.h"
 #include "ngx_rtmp_codec_module.h"
+#include "ngx_rtmp_stats.h"
 
+
+
+#define DEBUG_LEVEL NGX_LOG_DEBUG
+#define DBG(fmt, args...) ngx_log_error(DEBUG_LEVEL, ngx_cycle->log, 0, "IPC:" fmt, ##args)
+
+int ngx_lua_ipc_broadcast_alert(ngx_str_t *name, ngx_str_t *data);
 
 static ngx_int_t ngx_rtmp_stat_init_process(ngx_cycle_t *cycle);
 static char *ngx_rtmp_stat(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
@@ -366,6 +373,13 @@ ngx_rtmp_stat_client(ngx_http_request_t *r, ngx_chain_t ***lll,
     }
 }
 
+static ngx_int_t
+ngx_rtmp_stat_collect_client(ngx_rtmp_session_t *s, ngx_rtmp_stats_t *st)
+{
+    st->ids[st->idx++] = s->connection->number;
+    return NGX_OK;
+}
+
 
 static char *
 ngx_rtmp_stat_get_aac_profile(ngx_uint_t p, ngx_uint_t sbr, ngx_uint_t ps) {
@@ -600,6 +614,41 @@ ngx_rtmp_stat_live(ngx_http_request_t *r, ngx_chain_t ***lll,
     NGX_RTMP_STAT_L("</live>\r\n");
 }
 
+static ngx_int_t
+ngx_rtmp_stat_collect_live(ngx_rtmp_live_app_conf_t *lacf, ngx_rtmp_stats_t *st)
+{
+    ngx_rtmp_live_stream_t         *stream;
+    ngx_rtmp_live_ctx_t            *ctx;
+    ngx_rtmp_session_t             *s;
+    ngx_int_t                       n;
+    ngx_uint_t                      nclients, total_nclients;
+
+
+    //DBG("dump | ngx_rtmp_stat_collect_live lacf->live: %ui", lacf->live);
+    if (!lacf->live) {
+        return NGX_OK;
+    }
+
+    total_nclients = 0;
+    for (n = 0; n < lacf->nbuckets; ++n) {
+        for (stream = lacf->streams[n]; stream; stream = stream->next) {
+            DBG("dump | \tstream bw_in.bandwidth=%uL", stream->bw_in.bandwidth);
+            DBG("dump | \tstream bw_in.bytes=%uL", stream->bw_in.bytes);
+            DBG("dump | \tstream bw_out.bandwidth=%uL", stream->bw_out.bandwidth);
+            DBG("dump | \tstream bw_out.bytes=%uL", stream->bw_out.bytes);
+            nclients = 0;
+            for (ctx = stream->ctx; ctx; ctx = ctx->next, ++nclients) {
+                s = ctx->session;
+                //DBG("dump | \tclient with id=%d", s->connection->number);
+                ngx_rtmp_stat_collect_client(s, st);
+            }
+            total_nclients += nclients;
+        }
+    }
+    st->stream_nclients = total_nclients;
+    return NGX_OK;
+}
+
 
 static void
 ngx_rtmp_stat_play(ngx_http_request_t *r, ngx_chain_t ***lll,
@@ -667,9 +716,46 @@ ngx_rtmp_stat_play(ngx_http_request_t *r, ngx_chain_t ***lll,
     NGX_RTMP_STAT_L("<nclients>");
     NGX_RTMP_STAT(buf, ngx_snprintf(buf, sizeof(buf),
                   "%ui", total_nclients) - buf);
+    ngx_rtmp_my_total_nclients = total_nclients;
     NGX_RTMP_STAT_L("</nclients>\r\n");
 
     NGX_RTMP_STAT_L("</play>\r\n");
+}
+
+
+static ngx_int_t
+ngx_rtmp_stat_collect_play(ngx_rtmp_play_app_conf_t *pacf, ngx_rtmp_stats_t *st)
+{
+    ngx_rtmp_play_ctx_t            *ctx, *sctx;
+    ngx_uint_t                      n, nclients, total_nclients;
+    ngx_rtmp_session_t             *s;
+
+    DBG("dump | ngx_rtmp_stat_collect_play pacf->entries.nelts: %ui", pacf->entries.nelts);
+    if (pacf->entries.nelts == 0) {
+        return NGX_OK;
+    }
+
+    total_nclients = 0;
+    for (n = 0; n < pacf->nbuckets; ++n) {
+        for (ctx = pacf->ctx[n]; ctx; ) {
+            nclients = 0;
+            sctx = ctx;
+            sctx = ctx;
+            for (; ctx; ctx = ctx->next) {
+                if (ngx_strcmp(ctx->name, sctx->name)) {
+                    break;
+                }
+
+                nclients++;
+
+                s = ctx->session;
+                ngx_rtmp_stat_collect_client(s, st);
+            }
+            total_nclients += nclients;
+        }
+    }
+    st->nclients = total_nclients;
+    return NGX_OK;
 }
 
 
@@ -699,6 +785,22 @@ ngx_rtmp_stat_application(ngx_http_request_t *r, ngx_chain_t ***lll,
     NGX_RTMP_STAT_L("</application>\r\n");
 }
 
+static ngx_int_t
+ngx_rtmp_stat_collect_application(ngx_rtmp_core_app_conf_t *cacf, ngx_rtmp_stats_t *st) {
+    ngx_int_t      rc;
+
+    if ((rc = ngx_rtmp_stat_collect_live(
+             cacf->app_conf[ngx_rtmp_live_module.ctx_index], st)) != NGX_OK) {
+        return rc;
+    }
+
+    if ((rc = ngx_rtmp_stat_collect_play(
+             cacf->app_conf[ngx_rtmp_play_module.ctx_index], st)) != NGX_OK) {
+        return rc;
+    }
+
+    return NGX_OK;
+}
 
 static void
 ngx_rtmp_stat_server(ngx_http_request_t *r, ngx_chain_t ***lll,
@@ -719,6 +821,64 @@ ngx_rtmp_stat_server(ngx_http_request_t *r, ngx_chain_t ***lll,
     }
 
     NGX_RTMP_STAT_L("</server>\r\n");
+}
+
+static ngx_int_t
+ngx_rtmp_stat_collect_server(ngx_rtmp_core_srv_conf_t *cscf,
+         ngx_rtmp_stats_t *st) {
+    ngx_rtmp_core_app_conf_t      **cacf;
+    size_t                          n;
+    ngx_int_t                       rc;
+
+//    st->applications = ngx_array_create(r->pool, cscf->applications.nelts,
+//                                        sizeof(ngx_rtmp_core_app_conf_t));
+//    if (st->applications == NULL) {
+//        return NGX_ERROR;
+//    }
+
+    DBG("dump | ngx_rtmp_stat_collect_server apps: %ui", cscf->applications.nelts);
+    cacf = cscf->applications.elts;
+    for (n = 0; n < cscf->applications.nelts; ++n, ++cacf) {
+        if ((rc = ngx_rtmp_stat_collect_application(*cacf, st)) != NGX_OK) {
+            return rc;
+        }
+    }
+    return NGX_OK;
+}
+
+ngx_rtmp_stats_t*
+ngx_rtmp_stat_collect(ngx_log_t *log) {
+    ngx_rtmp_core_main_conf_t      *cmcf;
+    ngx_rtmp_core_srv_conf_t      **cscf;
+    ngx_int_t                       rc;
+    ngx_uint_t                      n;
+    ngx_rtmp_stats_t               *stats;
+
+    DBG("dump | ngx_rtmp_stat_collect");
+
+    cmcf = ngx_rtmp_core_main_conf;
+    if (cmcf == NULL) {
+        return NULL;
+    }
+
+    stats = ngx_calloc(sizeof(ngx_rtmp_stats_t), log);
+    if (stats == NULL) {
+        return NULL;
+    }
+
+    stats->bw_in = ngx_rtmp_bw_in;
+    stats->bw_out = ngx_rtmp_bw_out;
+    stats->naccepted = ngx_rtmp_naccepted;
+
+    cscf = cmcf->servers.elts;
+    for (n = 0; n < cmcf->servers.nelts; ++n, ++cscf) {
+        if ((rc = ngx_rtmp_stat_collect_server(*cscf, stats)) != NGX_OK) {
+            ngx_free(stats);
+            return NULL;
+        }
+    }
+    DBG("dump | end ngx_rtmp_stat_collect: stream_clients=%ui", stats->stream_nclients);
+    return stats;
 }
 
 
@@ -782,7 +942,7 @@ ngx_rtmp_stat_handler(ngx_http_request_t *r)
 
     NGX_RTMP_STAT_L("<naccepted>");
     NGX_RTMP_STAT(nbuf, ngx_snprintf(nbuf, sizeof(nbuf),
-                  "%ui", ngx_rtmp_naccepted) - nbuf);
+                  "%ui", &ngx_rtmp_naccepted) - nbuf);
     NGX_RTMP_STAT_L("</naccepted>\r\n");
 
     ngx_rtmp_stat_bw(r, lll, &ngx_rtmp_bw_in, "in", NGX_RTMP_STAT_BW_BYTES);
@@ -794,6 +954,10 @@ ngx_rtmp_stat_handler(ngx_http_request_t *r)
     }
 
     NGX_RTMP_STAT_L("</rtmp>\r\n");
+
+    ngx_str_t name = ngx_string("rtmp_stats");
+    ngx_str_t data = ngx_string("collect");
+    ngx_lua_ipc_broadcast_alert(&name, &data);
 
     len = 0;
     for (l = cl; l; l = l->next) {
