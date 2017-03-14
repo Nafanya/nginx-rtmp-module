@@ -15,9 +15,11 @@ typedef struct ngx_rtmp_stat_request_ctx_s    ngx_rtmp_stat_request_ctx_t;
 
 struct ngx_rtmp_stat_request_ctx_s {
     ngx_int_t    responses;
-    ngx_event_t  sleep;
+    ngx_event_t  tick;
     ngx_time_t   timer_begin;
-    ngx_int_t    result; // tmp
+    ngx_int_t    result;
+
+    ngx_int_t    state;
 
     unsigned     waiting:1;
     unsigned     done:1;
