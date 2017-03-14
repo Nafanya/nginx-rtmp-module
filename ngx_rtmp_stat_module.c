@@ -18,9 +18,11 @@
 
 
 #define DEBUG_LEVEL NGX_LOG_DEBUG
-#define DBG(fmt, args...) ngx_log_error(DEBUG_LEVEL, ngx_cycle->log, 0, "IPC:" fmt, ##args)
+#define DBG(fmt, args...) ngx_log_error(DEBUG_LEVEL, ngx_cycle->log, 0, "IPC | " fmt, ##args)
 
 int ngx_lua_ipc_broadcast_alert(ngx_str_t *name, ngx_str_t *data);
+int ngx_lua_ipc_broadcast_except_one_alert(ngx_int_t excluded_pid, ngx_str_t *name, ngx_str_t *data);
+void ngx_rtmp_stat_wev_handler(ngx_http_request_t *r);
 
 static ngx_int_t ngx_rtmp_stat_init_process(ngx_cycle_t *cycle);
 static char *ngx_rtmp_stat(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
@@ -47,6 +49,7 @@ static time_t                       start_time;
 typedef struct {
     ngx_uint_t                      stat;
     ngx_str_t                       stylesheet;
+    ngx_int_t                       state;
 } ngx_rtmp_stat_loc_conf_t;
 
 
@@ -112,6 +115,167 @@ ngx_module_t  ngx_rtmp_stat_module = {
 
 #define NGX_RTMP_STAT_BUFSIZE           256
 
+static void
+ngx_rtmp_stat_post_sleep(ngx_http_request_t *r) {
+    ngx_rtmp_stat_request_ctx_t    *ctx;
+
+    DBG("ngx_rtmp_echo_post_sleep");
+
+    ctx = ngx_http_get_module_ctx(r, ngx_rtmp_stat_module);
+
+    if (ctx == NULL) {
+        return;
+    }
+
+    ctx->waiting = 0;
+    ctx->done = 1;
+
+    DBG("sleep: after get module ctx");
+
+    DBG("timed out? %d", ctx->sleep.timedout);
+    DBG("timer set? %d", ctx->sleep.timer_set);
+
+    if (!ctx->sleep.timedout) {
+        DBG("timer is timed out yet");
+        return; //req timed out
+    }
+
+    ctx->sleep.timedout = 0;
+
+    if (!ctx->sleep.timer_set) {
+        DBG("deleting timer for echo_sleep");
+        ngx_del_timer(&ctx->sleep);
+    }
+
+    /* r->write_event_handler = ngx_http_request_empty_handler; */
+
+    ngx_rtmp_stat_wev_handler(r);
+}
+
+void
+ngx_rtmp_stat_wev_handler(ngx_http_request_t *r) {
+    ngx_rtmp_stat_request_ctx_t   *ctx;
+
+    ctx = ngx_http_get_module_ctx(r, ngx_rtmp_stat_module);
+
+    DBG("ngx_rtmp_stat_wev_handler");
+
+    if (ctx == NULL) {
+        ngx_http_finalize_request(r, NGX_ERROR);
+        return;
+    }
+
+    DBG("ngx_rtmp_stat_wev_handler waiting=%d, done=%d", (int)ctx->waiting, (int)ctx->done);
+
+    if (ctx->waiting && ! ctx->done) {
+        if (r == r->connection->data && r->postponed) {
+            if (r->postponed->request) {
+                r->connection->data = r->postponed->request;
+#if defined(nginx_version) && nginx_version >= 8012
+                ngx_http_post_request(r->postponed->request, NULL);
+#else
+                ngx_http_post_request(r->postponed->request);
+#endif
+            } else {
+                if (r == r->connection->data && r->postponed) {
+                        /* notify the downstream postpone filter to flush the postponed
+                         * outputs of the current request */
+                        //TODO: check returned value
+                        ngx_http_output_filter(r, NULL);
+                    }
+
+                    /* do nothing */
+                    //return NGX_OK; //TODO: redo returns
+                return;
+            }
+        }
+        return;
+    }
+
+    ctx->done = 1;
+    ctx->waiting = 0;
+    ngx_http_finalize_request(r, NGX_OK);
+}
+
+void
+ngx_rtmp_stat_sleep_event_handler(ngx_event_t *ev) {
+    ngx_connection_t        *c;
+    ngx_http_request_t      *r;
+    ngx_http_log_ctx_t      *ctx;
+
+    DBG("ngx_rtmp_stat_waiter_event_handler");
+
+    r = ev->data;
+    c = r->connection;
+
+    if (c->destroyed) {
+        return;
+    }
+
+    if (c->error) {
+        ngx_http_finalize_request(r, NGX_ERROR);
+        return;
+    }
+
+    ctx = c->log->data;
+    ctx->current_request = r;
+
+    /* XXX when r->done == 1 we should do cleaning immediately
+     * and delete our timer and then quit. */
+
+    ngx_log_debug2(NGX_LOG_DEBUG_HTTP, c->log, 0,
+                   "rtmp sleep event handler: \"%V?%V\"", &r->uri, &r->args);
+
+    /*
+    if (r->done) {
+        return;
+    }
+    */
+
+    ngx_rtmp_stat_post_sleep(r);
+
+#if defined(nginx_version)
+
+    DBG("before run posted requests");
+
+    ngx_http_run_posted_requests(c);
+
+    DBG("after run posted requests");
+
+#endif
+}
+
+ngx_rtmp_stat_request_ctx_t *
+ngx_rtmp_stat_create_request_ctx(ngx_http_request_t *r) {
+    ngx_rtmp_stat_request_ctx_t  *ctx;
+
+    ctx = ngx_pcalloc(r->pool, sizeof(ngx_rtmp_stat_request_ctx_t));
+    if (ctx == NULL) {
+        return NULL;
+    }
+
+    ctx->sleep.handler = ngx_rtmp_stat_sleep_event_handler;
+    ctx->sleep.data    = r;
+    ctx->sleep.log     = r->connection->log;
+
+    return ctx;
+}
+
+static void
+ngx_rtmp_stat_sleep_cleanup(void *data) {
+    ngx_http_request_t           *r = data;
+    ngx_rtmp_stat_request_ctx_t  *ctx;
+
+    DBG("ngx_rtmp_stat_sleep_cleanup");
+
+    ctx = ngx_http_get_module_ctx(r, ngx_rtmp_stat_module);
+
+    if (ctx == NULL) {
+        return;
+    }
+
+    ngx_del_timer(&ctx->sleep);
+}
 
 static ngx_int_t
 ngx_rtmp_stat_init_process(ngx_cycle_t *cycle)
@@ -632,10 +796,10 @@ ngx_rtmp_stat_collect_live(ngx_rtmp_live_app_conf_t *lacf, ngx_rtmp_stats_t *st)
     total_nclients = 0;
     for (n = 0; n < lacf->nbuckets; ++n) {
         for (stream = lacf->streams[n]; stream; stream = stream->next) {
-            DBG("dump | \tstream bw_in.bandwidth=%uL", stream->bw_in.bandwidth);
-            DBG("dump | \tstream bw_in.bytes=%uL", stream->bw_in.bytes);
-            DBG("dump | \tstream bw_out.bandwidth=%uL", stream->bw_out.bandwidth);
-            DBG("dump | \tstream bw_out.bytes=%uL", stream->bw_out.bytes);
+//            DBG("dump | \tstream bw_in.bandwidth=%uL", stream->bw_in.bandwidth);
+//            DBG("dump | \tstream bw_in.bytes=%uL", stream->bw_in.bytes);
+//            DBG("dump | \tstream bw_out.bandwidth=%uL", stream->bw_out.bandwidth);
+//            DBG("dump | \tstream bw_out.bytes=%uL", stream->bw_out.bytes);
             nclients = 0;
             for (ctx = stream->ctx; ctx; ctx = ctx->next, ++nclients) {
                 s = ctx->session;
@@ -716,7 +880,6 @@ ngx_rtmp_stat_play(ngx_http_request_t *r, ngx_chain_t ***lll,
     NGX_RTMP_STAT_L("<nclients>");
     NGX_RTMP_STAT(buf, ngx_snprintf(buf, sizeof(buf),
                   "%ui", total_nclients) - buf);
-    ngx_rtmp_my_total_nclients = total_nclients;
     NGX_RTMP_STAT_L("</nclients>\r\n");
 
     NGX_RTMP_STAT_L("</play>\r\n");
@@ -730,7 +893,6 @@ ngx_rtmp_stat_collect_play(ngx_rtmp_play_app_conf_t *pacf, ngx_rtmp_stats_t *st)
     ngx_uint_t                      n, nclients, total_nclients;
     ngx_rtmp_session_t             *s;
 
-    DBG("dump | ngx_rtmp_stat_collect_play pacf->entries.nelts: %ui", pacf->entries.nelts);
     if (pacf->entries.nelts == 0) {
         return NGX_OK;
     }
@@ -836,7 +998,6 @@ ngx_rtmp_stat_collect_server(ngx_rtmp_core_srv_conf_t *cscf,
 //        return NGX_ERROR;
 //    }
 
-    DBG("dump | ngx_rtmp_stat_collect_server apps: %ui", cscf->applications.nelts);
     cacf = cscf->applications.elts;
     for (n = 0; n < cscf->applications.nelts; ++n, ++cacf) {
         if ((rc = ngx_rtmp_stat_collect_application(*cacf, st)) != NGX_OK) {
@@ -853,8 +1014,6 @@ ngx_rtmp_stat_collect(ngx_log_t *log) {
     ngx_int_t                       rc;
     ngx_uint_t                      n;
     ngx_rtmp_stats_t               *stats;
-
-    DBG("dump | ngx_rtmp_stat_collect");
 
     cmcf = ngx_rtmp_core_main_conf;
     if (cmcf == NULL) {
@@ -877,10 +1036,9 @@ ngx_rtmp_stat_collect(ngx_log_t *log) {
             return NULL;
         }
     }
-    DBG("dump | end ngx_rtmp_stat_collect: stream_clients=%ui", stats->stream_nclients);
+//    DBG("dump | end ngx_rtmp_stat_collect: stream_clients=%ui", stats->stream_nclients);
     return stats;
 }
-
 
 static ngx_int_t
 ngx_rtmp_stat_handler(ngx_http_request_t *r)
@@ -888,21 +1046,68 @@ ngx_rtmp_stat_handler(ngx_http_request_t *r)
     ngx_rtmp_stat_loc_conf_t       *slcf;
     ngx_rtmp_core_main_conf_t      *cmcf;
     ngx_rtmp_core_srv_conf_t      **cscf;
+    ngx_rtmp_stat_request_ctx_t    *req_ctx;
     ngx_chain_t                    *cl, *l, **ll, ***lll;
     size_t                          n;
     off_t                           len;
     static u_char                   tbuf[NGX_TIME_T_LEN];
     static u_char                   nbuf[NGX_INT_T_LEN];
+    ngx_http_cleanup_t             *cln;
+
 
     slcf = ngx_http_get_module_loc_conf(r, ngx_rtmp_stat_module);
     if (slcf->stat == 0) {
         return NGX_DECLINED;
     }
 
+    req_ctx = ngx_http_get_module_ctx(r, ngx_rtmp_stat_module);
+    if (req_ctx == NULL) {
+        req_ctx = ngx_rtmp_stat_create_request_ctx(r);
+        if (req_ctx == NULL) {
+            return NGX_ERROR;
+        }
+        ngx_http_set_ctx(r, req_ctx, ngx_rtmp_stat_module);
+    }
+
     cmcf = ngx_rtmp_core_main_conf;
     if (cmcf == NULL) {
         goto error;
     }
+
+    DBG("req_ctx->response = %d", req_ctx->responses);
+    if (req_ctx->responses == 0) {
+        req_ctx->responses = 1;
+        DBG("rtmp handler called 1st time");
+        ngx_str_t name = ngx_string("collect");
+        ngx_str_t data = ngx_string("stats flags");
+        //ngx_lua_ipc_broadcast_except_one_alert(ngx_getpid(), &name, &data);
+        ngx_lua_ipc_broadcast_alert(&name, &data);
+
+        ngx_add_timer(&req_ctx->sleep, (ngx_msec_t) 3000);
+        cln = ngx_http_cleanup_add(r, 0);
+        if (cln == NULL) {
+            return NGX_ERROR;
+        }
+        cln->handler = ngx_rtmp_stat_sleep_cleanup;
+        cln->data = r;
+
+#if defined(nginx_version) && nginx_version >= 8011
+    r->main->count++;
+#endif
+
+        DBG("r->destroyed:%d, r->done:%d", r->connection->destroyed, r->done);
+
+        if (req_ctx) {
+            DBG("mark busy");
+
+            req_ctx->waiting = 1;
+            req_ctx->done = 0;
+        }
+
+        return NGX_DONE;
+    }
+
+    DBG("rtmp handler called 2nd time: result=%d", req_ctx->result);
 
     cl = NULL;
     ll = &cl;
@@ -955,10 +1160,6 @@ ngx_rtmp_stat_handler(ngx_http_request_t *r)
 
     NGX_RTMP_STAT_L("</rtmp>\r\n");
 
-    ngx_str_t name = ngx_string("rtmp_stats");
-    ngx_str_t data = ngx_string("collect");
-    ngx_lua_ipc_broadcast_alert(&name, &data);
-
     len = 0;
     for (l = cl; l; l = l->next) {
         len += (l->buf->last - l->buf->pos);
@@ -988,6 +1189,7 @@ ngx_rtmp_stat_create_loc_conf(ngx_conf_t *cf)
     }
 
     conf->stat = 0;
+    conf->state = 0;
 
     return conf;
 }
@@ -1021,7 +1223,16 @@ ngx_rtmp_stat(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 static ngx_int_t
 ngx_rtmp_stat_postconfiguration(ngx_conf_t *cf)
 {
-    start_time = ngx_cached_time->sec;
+    //ngx_http_handler_pt       *h;
+    ngx_http_core_main_conf_t *cmcf;
+
+    cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
+//    h = ngx_array_push(&cmcf->phases[NGX_HTTP_CONTENT_PHASE].handlers);
+//    if (h == NULL) {
+//        return NGX_ERROR;
+//    }
+//    *h = ngx_rtmp_stat_handler;
+//    start_time = ngx_cached_time->sec;
 
     return NGX_OK;
 }
