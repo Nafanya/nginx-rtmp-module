@@ -34,7 +34,7 @@ static char * ngx_rtmp_stat_merge_loc_conf(ngx_conf_t *cf,
         void *parent, void *child);
 
 
-//static time_t                       start_time;
+static time_t                       start_time;
 
 
 #define NGX_RTMP_STAT_ALL           0xff
@@ -1062,6 +1062,8 @@ ngx_rtmp_stat_send_getstats_broadcast(ngx_http_request_t *r, ngx_rtmp_stat_reque
     ctx->state = 1; // now wait for responses
     ngx_add_timer(&ctx->tick, (ngx_msec_t) 100);
 
+    DBG("send broadcast from conn_id=%d", r->connection->fd);
+
 //    cln = ngx_http_cleanup_add(r, 0);
 //    if (cln == NULL) {
 //        return NGX_ERROR;
@@ -1140,7 +1142,17 @@ ngx_rtmp_stat_send_chain_link(ngx_http_request_t *r,
 static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev) {
     ngx_http_request_t              *r;
     ngx_rtmp_stat_request_ctx_t     *ctx;
-    ngx_int_t                        rc;
+//    ngx_int_t                        rc;
+
+    ngx_rtmp_stat_loc_conf_t       *slcf;
+    ngx_rtmp_core_main_conf_t      *cmcf;
+    ngx_rtmp_core_srv_conf_t      **cscf;
+//    ngx_rtmp_stat_request_ctx_t    *ctx;
+    ngx_chain_t                    *cl, *l, **ll, ***lll;
+    size_t                          n;
+    off_t                           len;
+    static u_char                   tbuf[NGX_TIME_T_LEN];
+    static u_char                   nbuf[NGX_INT_T_LEN];
 
     r = ev->data;
     if (r == NULL) {
@@ -1163,17 +1175,74 @@ static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev) {
         //rc = ngx_rtmp_stat_write_response(r, ctx);
     }
 
-    rc = ngx_rtmp_stat_send_chain_link(r, ctx, NULL /*indicate LAST */);
-
-    if (rc == NGX_ERROR || rc >= NGX_HTTP_SPECIAL_RESPONSE) {
-        return;// rc;
+    cmcf = ngx_rtmp_core_main_conf;
+    if (cmcf == NULL) {
+        return;//goto error;
     }
 
-    if (!r->request_body) {
-        if (ngx_http_discard_request_body(r) != NGX_OK) {
-            return;// NGX_ERROR;
-        }
+    slcf = ngx_http_get_module_loc_conf(r, ngx_rtmp_stat_module);
+
+    cl = NULL;
+    ll = &cl;
+    lll = &ll;
+
+    NGX_RTMP_STAT_L("<?xml version=\"1.0\" encoding=\"utf-8\" ?>\r\n");
+    if (slcf->stylesheet.len) {
+        NGX_RTMP_STAT_L("<?xml-stylesheet type=\"text/xsl\" href=\"");
+        NGX_RTMP_STAT_ES(&slcf->stylesheet);
+        NGX_RTMP_STAT_L("\" ?>\r\n");
     }
+
+    NGX_RTMP_STAT_L("<rtmp>\r\n");
+
+#ifdef NGINX_VERSION
+    NGX_RTMP_STAT_L("<nginx_version>" NGINX_VERSION "</nginx_version>\r\n");
+#endif
+
+#ifdef NGINX_RTMP_VERSION
+    NGX_RTMP_STAT_L("<nginx_rtmp_version>" NGINX_RTMP_VERSION "</nginx_rtmp_version>\r\n");
+#endif
+
+#ifdef NGX_COMPILER
+    NGX_RTMP_STAT_L("<compiler>" NGX_COMPILER "</compiler>\r\n");
+#endif
+    NGX_RTMP_STAT_L("<built>" __DATE__ " " __TIME__ "</built>\r\n");
+
+    NGX_RTMP_STAT_L("<pid>");
+    NGX_RTMP_STAT(nbuf, ngx_snprintf(nbuf, sizeof(nbuf),
+                  "%ui", (ngx_uint_t) ngx_getpid()) - nbuf);
+    NGX_RTMP_STAT_L("</pid>\r\n");
+
+    NGX_RTMP_STAT_L("<uptime>");
+    NGX_RTMP_STAT(tbuf, ngx_snprintf(tbuf, sizeof(tbuf),
+                  "%T", ngx_cached_time->sec - start_time) - tbuf);
+    NGX_RTMP_STAT_L("</uptime>\r\n");
+
+    NGX_RTMP_STAT_L("<naccepted>");
+    NGX_RTMP_STAT(nbuf, ngx_snprintf(nbuf, sizeof(nbuf),
+                  "%ui", &ngx_rtmp_naccepted) - nbuf);
+    NGX_RTMP_STAT_L("</naccepted>\r\n");
+
+    ngx_rtmp_stat_bw(r, lll, &ngx_rtmp_bw_in, "in", NGX_RTMP_STAT_BW_BYTES);
+    ngx_rtmp_stat_bw(r, lll, &ngx_rtmp_bw_out, "out", NGX_RTMP_STAT_BW_BYTES);
+
+    cscf = cmcf->servers.elts;
+    for (n = 0; n < cmcf->servers.nelts; ++n, ++cscf) {
+        ngx_rtmp_stat_server(r, lll, *cscf);
+    }
+
+    NGX_RTMP_STAT_L("</rtmp>\r\n");
+
+    len = 0;
+    for (l = cl; l; l = l->next) {
+        len += (l->buf->last - l->buf->pos);
+    }
+    ngx_str_set(&r->headers_out.content_type, "text/xml");
+    r->headers_out.content_length_n = len;
+    r->headers_out.status = NGX_HTTP_OK;
+    ngx_http_send_header(r);
+    (*ll)->buf->last_buf = 1;
+    /*retur*/ ngx_http_output_filter(r, cl);
 }
 
 static ngx_int_t
@@ -1237,6 +1306,7 @@ ngx_rtmp_stat_handler(ngx_http_request_t *r)
     return NGX_DONE;
 
     ngx_rtmp_stat_server(r, NULL, NULL);
+    ngx_rtmp_stat_send_chain_link(NULL, NULL, NULL);
 
     /*
     cmcf = ngx_rtmp_core_main_conf;
