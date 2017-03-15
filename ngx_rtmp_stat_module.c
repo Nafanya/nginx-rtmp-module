@@ -1220,7 +1220,7 @@ static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev) {
 
     NGX_RTMP_STAT_L("<naccepted>");
     NGX_RTMP_STAT(nbuf, ngx_snprintf(nbuf, sizeof(nbuf),
-                  "%ui", &ngx_rtmp_naccepted) - nbuf);
+                  "%ui", ngx_rtmp_naccepted) - nbuf);
     NGX_RTMP_STAT_L("</naccepted>\r\n");
 
     ngx_rtmp_stat_bw(r, lll, &ngx_rtmp_bw_in, "in", NGX_RTMP_STAT_BW_BYTES);
@@ -1473,7 +1473,7 @@ ngx_rtmp_stat_postconfiguration(ngx_conf_t *cf)
 //        return NGX_ERROR;
 //    }
 //    *h = ngx_rtmp_stat_handler;
-//    start_time = ngx_cached_time->sec;
+    start_time = ngx_cached_time->sec;
 
     return NGX_OK;
 }
