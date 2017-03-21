@@ -27,7 +27,7 @@ typedef struct {
     ngx_socket_t          conn_id;
     ngx_int_t             total_responses;
     ngx_int_t             got_responses;
-    ngx_str_t            *responses;
+    ngx_str_t           **responses;
 
     unsigned              active:1;
 } ngx_rtmp_stat_request_t;

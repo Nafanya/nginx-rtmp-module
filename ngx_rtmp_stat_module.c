@@ -19,7 +19,7 @@
 
 
 #define DEBUG_LEVEL NGX_LOG_DEBUG
-#define DBG(fmt, args...) ngx_log_error(DEBUG_LEVEL, ngx_cycle->log, 0, "IPC | " fmt, ##args)
+#define DBG(fmt, args...) ngx_log_error(DEBUG_LEVEL, ngx_cycle->log, 0, "JUJU | " fmt, ##args)
 
 int ngx_lua_ipc_broadcast_alert(ngx_str_t *name, ngx_str_t *data);
 int ngx_lua_ipc_broadcast_except_one_alert(ngx_int_t excluded_pid, ngx_str_t *name, ngx_str_t *data);
@@ -122,7 +122,39 @@ ngx_module_t  ngx_rtmp_stat_module = {
 
 void
 ngx_rtmp_stat_handle_stat(ngx_int_t conn_id, ngx_str_t *data) {
-    DBG("got a stat from con_id=%d, stat:%V", conn_id, data);
+    int                                 i;
+    ngx_rtmp_stat_request_t            *r = NULL;
+    ngx_str_t                          *s;
+
+    DBG("got a stat from con_id=%d, stat.len:%ui", conn_id, data->len);
+
+    for (i = 0; i < NGX_RTMP_STAT_MAX_REQUESTS; i++) {
+        if (ngx_rtmp_stat_request_map[i].active && ngx_rtmp_stat_request_map[i].conn_id == conn_id) {
+            r = &ngx_rtmp_stat_request_map[i];
+            break;
+        }
+    }
+
+    if (r == NULL) {
+        DBG("no active request with conn_id=%d was found", conn_id);
+        return;
+    }
+
+    s = ngx_palloc(r->r->pool, sizeof(ngx_str_t));
+    if (s == NULL) {
+        DBG("can't allocate %ui bytes for ngx_str_t", sizeof(ngx_str_t));
+        return;// TODO: handle error
+    }
+    s->data = ngx_palloc(r->r->pool, sizeof(u_char) * data->len);
+    if (s->data == NULL) {
+        DBG("can't allocate %ui bytes to store worker stats", data->len);
+        return;// TODO: handle error
+    }
+    ngx_memcpy(s->data, data->data, data->len);
+    s->len = data->len;
+
+    r->responses[r->got_responses++] = s;
+    DBG("got_responses=%d", r->got_responses);
 }
 
 void
@@ -131,14 +163,10 @@ ngx_rtmp_stat_wev_handler(ngx_http_request_t *r) {
 
     ctx = ngx_http_get_module_ctx(r, ngx_rtmp_stat_module);
 
-    DBG("ngx_rtmp_stat_wev_handler");
-
     if (ctx == NULL) {
         ngx_http_finalize_request(r, NGX_ERROR);
         return;
     }
-
-    DBG("ngx_rtmp_stat_wev_handler waiting=%d, done=%d", (int)ctx->waiting, (int)ctx->done);
 
     if (ctx->waiting && ! ctx->done) {
         if (r == r->connection->data && r->postponed) {
@@ -278,11 +306,13 @@ ngx_rtmp_stat_output(ngx_pool_t *pool, ngx_chain_t ***lll,
     if (**lll == NULL) {
         cl = ngx_alloc_chain_link(pool);
         if (cl == NULL) {
+            DBG("couldn't allocate chain_link");
             return;
         }
         b = ngx_create_temp_buf(pool,
                 ngx_max(NGX_RTMP_STAT_BUFSIZE, real_len));
         if (b == NULL || b->pos == NULL) {
+            DBG("couldn't allocate temp_buf");
             return;
         }
         cl->next = NULL;
@@ -979,7 +1009,7 @@ ngx_rtmp_stat_create_stat_request(ngx_http_request_t *r) {
     sr->r = r;
     sr->conn_id = r->connection->fd;
     sr->got_responses = 0;
-    if ((sr->responses = ngx_pcalloc(r->pool, workers * sizeof(ngx_str_t))) == NULL) {
+    if ((sr->responses = ngx_pcalloc(r->pool, workers * sizeof(ngx_str_t*))) == NULL) {
         return NGX_ERROR;
     }
     sr->total_responses = workers;
@@ -1079,41 +1109,106 @@ ngx_rtmp_stat_create_stats(ngx_pool_t *pool) {
 static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev) {
     ngx_http_request_t              *r;
     ngx_rtmp_stat_request_ctx_t     *ctx;
-//    ngx_int_t                        rc;
+    ngx_rtmp_stat_request_t         *sr = NULL;
+    ngx_int_t                        i;
+    ngx_pool_t                      *pool;
 
     ngx_rtmp_core_main_conf_t      *cmcf;
-    ngx_chain_t                    *cl, *l;
-    off_t                           len;
+    ngx_chain_t                    *cl, *l, **ll, ***lll;
+    off_t                           len, resp_len;
+//    ngx_uint_t                      j, rest;
+    ngx_str_t                      *s;
 
     r = ev->data;
     if (r == NULL) {
         return;// NGX_ERROR;
     }
+    pool = r->pool;
 
     ctx = ngx_http_get_module_ctx(r, ngx_rtmp_stat_module);
     if (ctx == NULL) {
         return;// NGX_ERROR;
     }
 
+    for (i = 0; i < NGX_RTMP_STAT_MAX_REQUESTS; i++) {
+        if (ngx_rtmp_stat_request_map[i].active && ngx_rtmp_stat_request_map[i].conn_id == r->connection->fd) {
+            sr = &ngx_rtmp_stat_request_map[i];
+            break;
+        }
+    }
+
+    if (sr == NULL) {
+        return; // TODO: handle properly, should never occur
+    }
+
     //TODO: proper timeout variable
     DBG("\t state %d", ctx->state);
-    if (ctx->state < 10) {
+    if (sr->got_responses < sr->total_responses && ctx->state < 10) {
         ctx->state++;
         ngx_add_timer(&ctx->tick, (ngx_msec_t)100);
         return;// NGX_AGAIN;
     }
+
+    sr->active = 0;
 
     cmcf = ngx_rtmp_core_main_conf;
     if (cmcf == NULL) {
         return;//goto error;
     }
 
-    cl = ngx_rtmp_stat_create_stats(r->pool);
+    cl = ngx_rtmp_stat_create_stats(pool);
+    for (l = cl; l; l = l->next) {
+        ll = &l;
+        lll = &ll;
+    }
 
     len = 0;
     for (l = cl; l; l = l->next) {
         len += (l->buf->last - l->buf->pos);
+        DBG("buffers: len=%ui, last=%d", l->buf->last - l->buf->pos, l->buf->last_buf);
     }
+    if (sr->got_responses > 0) {
+        DBG("adding %d responses to out chain", sr->got_responses);
+        for (l = cl; l; l = l->next) {
+            l->buf->last_buf = 0;
+        }
+
+        resp_len = 0;
+        for (i = 0; i < sr->got_responses; i++) {
+            resp_len += sr->responses[i]->len;
+        }
+        len += resp_len;
+
+//////////////
+        ngx_chain_t        *cll;
+        ngx_buf_t          *b;
+
+        cll = ngx_alloc_chain_link(pool);
+        if (cll == NULL) {
+            DBG("can't alloc chain link");
+        }
+
+        b = ngx_create_temp_buf(pool, resp_len);
+        if (b == NULL || b->pos == NULL) {
+            DBG("can't alloc temp buf");
+        }
+        for (l = cl; l->next; l = l->next);
+        l->next = cll;
+        cll->next = NULL;
+        cll->buf = b;
+        cll->buf->last_buf = 1;
+
+        for (i = 0; i < sr->got_responses; i++) {
+            s = sr->responses[i];
+            DBG("copying %ui bytes to response buffer", s->len);
+            b->last = ngx_cpymem(b->last, s->data, s->len);
+        }
+
+        for (l = cl; l; l = l->next) {
+            DBG("buffers: len=%ui, last=%d", l->buf->last - l->buf->pos, l->buf->last_buf);
+        }
+    }
+
     ngx_str_set(&r->headers_out.content_type, "text/xml");
     r->headers_out.content_length_n = len;
     r->headers_out.status = NGX_HTTP_OK;
