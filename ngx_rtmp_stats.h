@@ -8,7 +8,7 @@
 
 #include <ngx_rtmp.h>
 
-ngx_chain_t * ngx_rtmp_stat_create_stats(ngx_http_request_t *r);
+ngx_chain_t * ngx_rtmp_stat_create_stats(ngx_pool_t *pool);
 void ngx_rtmp_stat_handle_stat(ngx_int_t conn_id, ngx_str_t *data);
 
 typedef struct ngx_rtmp_stats_s               ngx_rtmp_stats_t;
