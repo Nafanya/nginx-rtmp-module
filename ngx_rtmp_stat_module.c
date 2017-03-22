@@ -21,8 +21,8 @@
 #define DEBUG_LEVEL NGX_LOG_DEBUG
 #define DBG(fmt, args...) ngx_log_error(DEBUG_LEVEL, ngx_cycle->log, 0, "JUJU | " fmt, ##args)
 
-int ngx_lua_ipc_broadcast_alert(ngx_str_t *name, ngx_str_t *data);
-int ngx_lua_ipc_broadcast_except_one_alert(ngx_int_t excluded_pid, ngx_str_t *name, ngx_str_t *data);
+int ngx_ipc_broadcast_alert(ngx_str_t *name, ngx_str_t *data);
+int ngx_ipc_broadcast_except_one_alert(ngx_int_t excluded_pid, ngx_str_t *name, ngx_str_t *data);
 void ngx_rtmp_stat_wev_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_rtmp_stat_handler(ngx_http_request_t *r);
 static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev);
@@ -1032,7 +1032,7 @@ ngx_rtmp_stat_send_getstats_broadcast(ngx_http_request_t *r, ngx_rtmp_stat_reque
     ngx_str_t name = ngx_string("collect");
     ngx_str_t data = ngx_string(nbuf);
     data.len = end - data.data;
-    ngx_lua_ipc_broadcast_alert(&name, &data);
+    ngx_ipc_broadcast_alert(&name, &data);
 
     ctx->state = 1; // now wait for responses
     ngx_add_timer(&ctx->tick, (ngx_msec_t) 100);
