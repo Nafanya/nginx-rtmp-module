@@ -28,9 +28,9 @@ typedef struct {
     ngx_int_t             total_responses;
     ngx_int_t             got_responses;
     ngx_str_t           **responses;
+    ngx_int_t             error;
 
     unsigned              active:1;
-    unsigned              error:1;
 } ngx_rtmp_stat_request_t;
 
 extern ngx_rtmp_stat_request_t ngx_rtmp_stat_request_map[NGX_RTMP_STAT_MAX_REQUESTS];
@@ -44,7 +44,7 @@ typedef enum {
 struct ngx_rtmp_stat_request_ctx_s {
     ngx_int_t                        responses;
     ngx_event_t                      tick;
-    ngx_time_t                       timer_begin;
+    ngx_uint_t                       timer_begin;
     ngx_int_t                        result;
 
     ngx_rtmp_stat_request_state_t    state;

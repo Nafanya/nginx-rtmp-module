@@ -191,7 +191,7 @@ ngx_rtmp_stat_create_request_ctx(ngx_http_request_t *r) {
         return NULL;
     }
 
-    ctx->timer_begin  = ngx_cached_time->msec;
+    ctx->timer_begin  = (ngx_timeofday())->msec;
     ctx->state        = state_rtmp_stat_start;
     ctx->tick.handler = ngx_rtmp_stat_tick_handler;
     ctx->tick.data    = r;
@@ -1006,7 +1006,7 @@ ngx_rtmp_stat_create_stat_request(ngx_http_request_t *r) {
 static ngx_int_t
 ngx_rtmp_stat_send_getstats_broadcast(ngx_http_request_t *r, ngx_rtmp_stat_request_ctx_t *ctx) {
     ngx_int_t                       rc;
-    static u_char                   nbuf[NGX_INT_T_LEN]; //TODO: ensure length is sufficient
+    static u_char                   nbuf[NGX_INT_T_LEN];
     u_char                         *end;
 
     rc = ngx_rtmp_stat_create_stat_request(r);
@@ -1018,7 +1018,7 @@ ngx_rtmp_stat_send_getstats_broadcast(ngx_http_request_t *r, ngx_rtmp_stat_reque
     ngx_str_t name = ngx_string("collect");
     ngx_str_t data = ngx_string(nbuf);
     data.len = end - data.data;
-    ngx_ipc_broadcast_alert(&name, &data); //TODO: include or exclude self
+    ngx_ipc_broadcast_alert(&name, &data);
 
     ctx->state = state_rtmp_stat_awaiting_responses;
     ngx_add_timer(&ctx->tick, (ngx_msec_t) 100);
@@ -1096,7 +1096,7 @@ static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev) {
     ngx_http_request_t              *r;
     ngx_rtmp_stat_request_ctx_t     *ctx;
     ngx_rtmp_stat_request_t         *sr = NULL;
-    ngx_int_t                        i;
+    ngx_int_t                        i, rc;
     ngx_pool_t                      *pool;
 
     ngx_rtmp_core_main_conf_t       *cmcf;
@@ -1107,13 +1107,13 @@ static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev) {
 
     r = ev->data;
     if (r == NULL) {
-        return;// NGX_ERROR;
+        goto error;
     }
     pool = r->pool;
 
     ctx = ngx_http_get_module_ctx(r, ngx_rtmp_stat_module);
     if (ctx == NULL) {
-        return;// NGX_ERROR;
+        goto error;
     }
 
     for (i = 0; i < NGX_RTMP_STAT_MAX_REQUESTS; i++) {
@@ -1124,15 +1124,19 @@ static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev) {
     }
 
     if (sr == NULL) {
-        return; // TODO: handle properly, should never occur
+        goto error;
     }
 
-    if (ctx->timer_begin)
+    if (sr->error) {
+        goto error;
+    }
 
-    //TODO: proper timeout variable
+    //TODO: replace hardcoded value with loc conf value
+    if ((ngx_timeofday())->msec - ctx->timer_begin > 1000) {
+        ctx->state = state_rtmp_stat_timedout;
+    }
     DBG("\t state %d", ctx->state);
-    if (sr->got_responses < sr->total_responses &&
-            ctx->state != state_rtmp_stat_timedout) {
+    if (sr->got_responses < sr->total_responses && ctx->state != state_rtmp_stat_timedout) {
         ngx_add_timer(&ctx->tick, (ngx_msec_t)100);
         return;// NGX_AGAIN;
     }
@@ -1172,8 +1176,25 @@ static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev) {
     ngx_str_set(&r->headers_out.content_type, "text/xml");
     r->headers_out.content_length_n = len;
     r->headers_out.status = NGX_HTTP_OK;
-    ngx_http_send_header(r);
-    /*return*/ ngx_http_output_filter(r, cl);
+    rc = ngx_http_send_header(r);
+    if (rc != NGX_OK) {
+        ngx_http_finalize_request(r, rc);
+    }
+    rc = ngx_http_output_filter(r, cl);
+    if (rc != NGX_OK) {
+        ngx_http_finalize_request(r, rc);
+    }
+    return;
+
+error:
+    ngx_rtmp_stat_clear_stat_request(r->connection->fd);
+
+    r->headers_out.status = NGX_HTTP_INTERNAL_SERVER_ERROR;
+    r->headers_out.content_length_n = 0;
+    rc = ngx_http_send_header(r);
+    if (rc != NGX_OK) {
+        ngx_http_finalize_request(r, rc);
+    }
 }
 
 
