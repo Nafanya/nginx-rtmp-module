@@ -162,16 +162,19 @@ ngx_rtmp_stat_handle_stat(ngx_int_t conn_id, ngx_str_t *data) {
 
     if (r == NULL) {
         DBG("no active request with conn_id=%d was found", conn_id);
+        r->error = NGX_ERROR;
         return;
     }
 
     s = ngx_alloc(sizeof(ngx_str_t), r->r->connection->log);
     if (s == NULL) {
         DBG("can't allocate %ui bytes for ngx_str_t", sizeof(ngx_str_t));
+        r->error = NGX_ERROR;
         return;// TODO: handle error
     }
     s->data = ngx_alloc(sizeof(u_char) * data->len, r->r->connection->log);
     if (s->data == NULL) {
+        r->error = NGX_ERROR;
         DBG("can't allocate %ui bytes to store worker stats", data->len);
         return;// TODO: handle error
     }
@@ -179,7 +182,7 @@ ngx_rtmp_stat_handle_stat(ngx_int_t conn_id, ngx_str_t *data) {
     s->len = data->len;
 
     r->responses[r->got_responses++] = s;
-    DBG("got_responses=%d", r->got_responses);
+    DBG("got %d/%d responses for connection %d", r->got_responses, r->total_responses, conn_id);
 }
 
 ngx_rtmp_stat_request_ctx_t *
@@ -1023,7 +1026,7 @@ ngx_rtmp_stat_send_getstats_broadcast(ngx_http_request_t *r, ngx_rtmp_stat_reque
     ctx->state = state_rtmp_stat_awaiting_responses;
     ngx_add_timer(&ctx->tick, (ngx_msec_t) 100);
 
-    DBG("send broadcast from conn_id=%d", r->connection->fd);
+    DBG("send broadcast from c:%d pid:%ui", r->connection->fd, (ngx_uint_t)ngx_getpid());
 
     return NGX_AGAIN;
 }
@@ -1039,7 +1042,7 @@ ngx_rtmp_stat_create_stats(ngx_pool_t *pool) {
 
     cmcf = ngx_rtmp_core_main_conf;
     if (cmcf == NULL) {
-        return NULL; // TODO: return error
+        return NULL;
     }
 
     cl = NULL;
@@ -1179,6 +1182,7 @@ static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev) {
     rc = ngx_http_send_header(r);
     if (rc != NGX_OK) {
         ngx_http_finalize_request(r, rc);
+        return;
     }
     rc = ngx_http_output_filter(r, cl);
     if (rc != NGX_OK) {
@@ -1192,9 +1196,7 @@ error:
     r->headers_out.status = NGX_HTTP_INTERNAL_SERVER_ERROR;
     r->headers_out.content_length_n = 0;
     rc = ngx_http_send_header(r);
-    if (rc != NGX_OK) {
-        ngx_http_finalize_request(r, rc);
-    }
+    ngx_http_finalize_request(r, rc);
 }
 
 
