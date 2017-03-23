@@ -30,21 +30,28 @@ typedef struct {
     ngx_str_t           **responses;
 
     unsigned              active:1;
+    unsigned              error:1;
 } ngx_rtmp_stat_request_t;
 
 extern ngx_rtmp_stat_request_t ngx_rtmp_stat_request_map[NGX_RTMP_STAT_MAX_REQUESTS];
 
+typedef enum {
+    state_rtmp_stat_start,
+    state_rtmp_stat_awaiting_responses,
+    state_rtmp_stat_timedout
+} ngx_rtmp_stat_request_state_t;
+
 struct ngx_rtmp_stat_request_ctx_s {
-    ngx_int_t    responses;
-    ngx_event_t  tick;
-    ngx_time_t   timer_begin;
-    ngx_int_t    result;
+    ngx_int_t                        responses;
+    ngx_event_t                      tick;
+    ngx_time_t                       timer_begin;
+    ngx_int_t                        result;
 
-    ngx_int_t    state;
+    ngx_rtmp_stat_request_state_t    state;
 
-    unsigned     waiting:1;
-    unsigned     done:1;
-    unsigned     header_sent:1;
+    unsigned                         waiting:1;
+    unsigned                         done:1;
+    unsigned                         header_sent:1;
 };
 
 struct ngx_rtmp_stats_s {
