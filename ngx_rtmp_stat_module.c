@@ -22,8 +22,6 @@
 #define DBG(fmt, args...) ngx_log_error(DEBUG_LEVEL, ngx_cycle->log, 0, "JUJU | " fmt, ##args)
 
 int ngx_ipc_broadcast_alert(ngx_str_t *name, ngx_str_t *data);
-int ngx_ipc_broadcast_except_one_alert(ngx_int_t excluded_pid, ngx_str_t *name, ngx_str_t *data);
-void ngx_rtmp_stat_wev_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_rtmp_stat_handler(ngx_http_request_t *r);
 static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev);
 
@@ -31,8 +29,7 @@ static ngx_int_t ngx_rtmp_stat_init_process(ngx_cycle_t *cycle);
 static char *ngx_rtmp_stat(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static ngx_int_t ngx_rtmp_stat_postconfiguration(ngx_conf_t *cf);
 static void * ngx_rtmp_stat_create_loc_conf(ngx_conf_t *cf);
-static char * ngx_rtmp_stat_merge_loc_conf(ngx_conf_t *cf,
-        void *parent, void *child);
+static char * ngx_rtmp_stat_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
 
 
 static time_t                       start_time;
@@ -43,6 +40,8 @@ static time_t                       start_time;
 #define NGX_RTMP_STAT_LIVE          0x02
 #define NGX_RTMP_STAT_CLIENTS       0x04
 #define NGX_RTMP_STAT_PLAY          0x08
+
+#define NGX_RTMP_STAT_BUFSIZE       256
 
 /*
  * global: stat-{bufs-{total,free,used}, total bytes in/out, bw in/out} - cscf
@@ -117,9 +116,6 @@ ngx_module_t  ngx_rtmp_stat_module = {
     NGX_MODULE_V1_PADDING
 };
 
-
-#define NGX_RTMP_STAT_BUFSIZE           256
-
 void
 ngx_rtmp_stat_handle_stat(ngx_int_t conn_id, ngx_str_t *data) {
     int                                 i;
@@ -156,48 +152,6 @@ ngx_rtmp_stat_handle_stat(ngx_int_t conn_id, ngx_str_t *data) {
     r->responses[r->got_responses++] = s;
     DBG("got_responses=%d", r->got_responses);
 }
-
-void
-ngx_rtmp_stat_wev_handler(ngx_http_request_t *r) {
-    ngx_rtmp_stat_request_ctx_t   *ctx;
-
-    ctx = ngx_http_get_module_ctx(r, ngx_rtmp_stat_module);
-
-    if (ctx == NULL) {
-        ngx_http_finalize_request(r, NGX_ERROR);
-        return;
-    }
-
-    if (ctx->waiting && ! ctx->done) {
-        if (r == r->connection->data && r->postponed) {
-            if (r->postponed->request) {
-                r->connection->data = r->postponed->request;
-#if defined(nginx_version) && nginx_version >= 8012
-                ngx_http_post_request(r->postponed->request, NULL);
-#else
-                ngx_http_post_request(r->postponed->request);
-#endif
-            } else {
-                if (r == r->connection->data && r->postponed) {
-                        /* notify the downstream postpone filter to flush the postponed
-                         * outputs of the current request */
-                        //TODO: check returned value
-                        ngx_http_output_filter(r, NULL);
-                    }
-
-                    /* do nothing */
-                    //return NGX_OK; //TODO: redo returns
-                return;
-            }
-        }
-        return;
-    }
-
-    ctx->done = 1;
-    ctx->waiting = 0;
-    ngx_http_finalize_request(r, NGX_OK);
-}
-
 
 ngx_rtmp_stat_request_ctx_t *
 ngx_rtmp_stat_create_request_ctx(ngx_http_request_t *r) {
