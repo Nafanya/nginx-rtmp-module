@@ -1148,7 +1148,7 @@ static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev) {
 
     cmcf = ngx_rtmp_core_main_conf;
     if (cmcf == NULL) {
-        return;//goto error;
+        goto error;
     }
 
     len = 0;
@@ -1160,11 +1160,13 @@ static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev) {
     cl = ngx_alloc_chain_link(pool);
     if (cl == NULL) {
         DBG("can't alloc chain link");
+        goto error;
     }
 
     b = ngx_create_temp_buf(pool, len);
     if (b == NULL || b->pos == NULL) {
         DBG("can't alloc temp buf");
+        goto error;
     }
     cl->next = NULL;
     cl->buf = b;
@@ -1176,6 +1178,8 @@ static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev) {
         b->last = ngx_cpymem(b->last, s->data, s->len);
     }
 
+    ngx_rtmp_stat_clear_stat_request(r->connection->fd);
+
     ngx_str_set(&r->headers_out.content_type, "text/xml");
     r->headers_out.content_length_n = len;
     r->headers_out.status = NGX_HTTP_OK;
@@ -1185,9 +1189,7 @@ static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev) {
         return;
     }
     rc = ngx_http_output_filter(r, cl);
-    if (rc != NGX_OK) {
-        ngx_http_finalize_request(r, rc);
-    }
+    ngx_http_finalize_request(r, rc);
     return;
 
 error:
