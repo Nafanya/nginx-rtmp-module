@@ -1207,16 +1207,7 @@ static ngx_int_t
 ngx_rtmp_stat_handler(ngx_http_request_t *r)
 {
     ngx_rtmp_stat_loc_conf_t       *slcf;
-//    ngx_core_conf_t                *ccf;
-//    ngx_rtmp_core_main_conf_t      *cmcf;
-//    ngx_rtmp_core_srv_conf_t      **cscf;
     ngx_rtmp_stat_request_ctx_t    *ctx;
-//    ngx_chain_t                    *cl, *l, **ll, ***lll;
-//    size_t                          n;
-//    off_t                           len;
-//    static u_char                   tbuf[NGX_TIME_T_LEN];
-//    static u_char                   nbuf[NGX_INT_T_LEN];
-//    ngx_http_cleanup_t             *cln;
     ngx_int_t                       rc;
 
 
@@ -1263,115 +1254,6 @@ ngx_rtmp_stat_handler(ngx_http_request_t *r)
     }
 
     return NGX_DONE;
-
-    /*
-    cmcf = ngx_rtmp_core_main_conf;
-    if (cmcf == NULL) {
-        goto error;
-    }
-
-    DBG("req_ctx->response = %d", req_ctx->responses);
-    if (req_ctx->responses == 0) {
-        req_ctx->responses = 1;
-        DBG("rtmp handler called 1st time");
-        ngx_str_t name = ngx_string("collect");
-        ngx_str_t data = ngx_string("stats flags");
-        //ngx_lua_ipc_broadcast_except_one_alert(ngx_getpid(), &name, &data);
-        ngx_lua_ipc_broadcast_alert(&name, &data);
-
-        ngx_add_timer(&req_ctx->sleep, (ngx_msec_t) 3000);
-        cln = ngx_http_cleanup_add(r, 0);
-        if (cln == NULL) {
-            return NGX_ERROR;
-        }
-        cln->handler = ngx_rtmp_stat_sleep_cleanup;
-        cln->data = r;
-
-#if defined(nginx_version) && nginx_version >= 8011
-    r->main->count++;
-#endif
-
-        DBG("r->destroyed:%d, r->done:%d", r->connection->destroyed, r->done);
-
-        if (req_ctx) {
-            DBG("mark busy");
-
-            req_ctx->waiting = 1;
-            req_ctx->done = 0;
-        }
-
-        return NGX_DONE;
-    }
-
-    DBG("rtmp handler called 2nd time: result=%d", req_ctx->result);
-
-    cl = NULL;
-    ll = &cl;
-    lll = &ll;
-
-    NGX_RTMP_STAT_L("<?xml version=\"1.0\" encoding=\"utf-8\" ?>\r\n");
-    if (slcf->stylesheet.len) {
-        NGX_RTMP_STAT_L("<?xml-stylesheet type=\"text/xsl\" href=\"");
-        NGX_RTMP_STAT_ES(&slcf->stylesheet);
-        NGX_RTMP_STAT_L("\" ?>\r\n");
-    }
-
-    NGX_RTMP_STAT_L("<rtmp>\r\n");
-
-#ifdef NGINX_VERSION
-    NGX_RTMP_STAT_L("<nginx_version>" NGINX_VERSION "</nginx_version>\r\n");
-#endif
-
-#ifdef NGINX_RTMP_VERSION
-    NGX_RTMP_STAT_L("<nginx_rtmp_version>" NGINX_RTMP_VERSION "</nginx_rtmp_version>\r\n");
-#endif
-
-#ifdef NGX_COMPILER
-    NGX_RTMP_STAT_L("<compiler>" NGX_COMPILER "</compiler>\r\n");
-#endif
-    NGX_RTMP_STAT_L("<built>" __DATE__ " " __TIME__ "</built>\r\n");
-
-    NGX_RTMP_STAT_L("<pid>");
-    NGX_RTMP_STAT(nbuf, ngx_snprintf(nbuf, sizeof(nbuf),
-                  "%ui", (ngx_uint_t) ngx_getpid()) - nbuf);
-    NGX_RTMP_STAT_L("</pid>\r\n");
-
-    NGX_RTMP_STAT_L("<uptime>");
-    NGX_RTMP_STAT(tbuf, ngx_snprintf(tbuf, sizeof(tbuf),
-                  "%T", ngx_cached_time->sec - start_time) - tbuf);
-    NGX_RTMP_STAT_L("</uptime>\r\n");
-
-    NGX_RTMP_STAT_L("<naccepted>");
-    NGX_RTMP_STAT(nbuf, ngx_snprintf(nbuf, sizeof(nbuf),
-                  "%ui", &ngx_rtmp_naccepted) - nbuf);
-    NGX_RTMP_STAT_L("</naccepted>\r\n");
-
-    ngx_rtmp_stat_bw(r, lll, &ngx_rtmp_bw_in, "in", NGX_RTMP_STAT_BW_BYTES);
-    ngx_rtmp_stat_bw(r, lll, &ngx_rtmp_bw_out, "out", NGX_RTMP_STAT_BW_BYTES);
-
-    cscf = cmcf->servers.elts;
-    for (n = 0; n < cmcf->servers.nelts; ++n, ++cscf) {
-        ngx_rtmp_stat_server(r, lll, *cscf);
-    }
-
-    NGX_RTMP_STAT_L("</rtmp>\r\n");
-
-    len = 0;
-    for (l = cl; l; l = l->next) {
-        len += (l->buf->last - l->buf->pos);
-    }
-    ngx_str_set(&r->headers_out.content_type, "text/xml");
-    r->headers_out.content_length_n = len;
-    r->headers_out.status = NGX_HTTP_OK;
-    ngx_http_send_header(r);
-    (*ll)->buf->last_buf = 1;
-    return ngx_http_output_filter(r, cl);
-
-error:
-    r->headers_out.status = NGX_HTTP_INTERNAL_SERVER_ERROR;
-    r->headers_out.content_length_n = 0;
-    return ngx_http_send_header(r);
-    */
 }
 
 
