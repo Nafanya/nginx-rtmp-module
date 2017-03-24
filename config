@@ -27,6 +27,7 @@ RTMP_CORE_MODULES="                                         \
 RTMP_HTTP_MODULES="                                         \
                 ngx_rtmp_stat_module                        \
                 ngx_rtmp_control_module                     \
+                ngx_ipc_module                              \
                 "
 
 
@@ -48,6 +49,10 @@ RTMP_DEPS="                                                 \
                 $ngx_addon_dir/ngx_rtmp_proxy_protocol.h    \
                 $ngx_addon_dir/hls/ngx_rtmp_mpegts.h        \
                 $ngx_addon_dir/dash/ngx_rtmp_mp4.h          \
+                $ngx_addon_dir/ngx_ipc.h                    \
+                $ngx_addon_dir/ngx_ipc_core.h               \
+                $ngx_addon_dir/ngx_ipc_shmem.h              \
+                $ngx_addon_dir/ngx_rtmp_stats.h             \
                 "
 
 
@@ -90,6 +95,9 @@ RTMP_CORE_SRCS="                                            \
 RTMP_HTTP_SRCS="                                            \
                 $ngx_addon_dir/ngx_rtmp_stat_module.c       \
                 $ngx_addon_dir/ngx_rtmp_control_module.c    \
+                $ngx_addon_dir/ngx_ipc.c                    \
+                $ngx_addon_dir/ngx_ipc_core.c               \
+                $ngx_addon_dir/ngx_ipc_shmem.c              \
                 "
 
 if [ -f auto/module ] ; then
@@ -113,7 +121,7 @@ if [ -f auto/module ] ; then
         ngx_module_type=HTTP
         ngx_module_name=$RTMP_HTTP_MODULES
         ngx_module_incs=
-        ngx_module_deps=
+        ngx_module_deps=$RTMP_DEPS
         ngx_module_srcs=$RTMP_HTTP_SRCS
 
         . auto/module
