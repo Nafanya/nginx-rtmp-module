@@ -25,6 +25,8 @@ static ngx_int_t ngx_rtmp_auto_push_delete_stream(ngx_rtmp_session_t *s,
        ngx_rtmp_delete_stream_t *v);
 #endif
 
+#define INFO(fmt, args...) ngx_log_error(NGX_LOG_INFO, ngx_cycle->log, 0, "%s " fmt, __FUNCTION__, ##args)
+
 
 typedef struct ngx_rtmp_auto_push_ctx_s ngx_rtmp_auto_push_ctx_t;
 
@@ -347,6 +349,7 @@ ngx_rtmp_auto_push_reconnect(ngx_event_t *ev)
     ngx_core_conf_t                *ccf;
     ngx_file_info_t                 fi;
 
+    INFO("auto_push: reconnect");
     ngx_log_debug0(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
                    "auto_push: reconnect");
 
@@ -403,6 +406,9 @@ ngx_rtmp_auto_push_reconnect(ngx_event_t *ev)
                            "auto_push: " ngx_file_info_n " failed: "
                            "slot=%i pid=%P socket='%s'" "url='%V' name='%s'",
                            n, pid, path, u, ctx->name);
+            INFO("auto_push: " ngx_file_info_n " failed: "
+                   "slot=%i pid=%P socket='%s'" "url='%V' name='%s'",
+                   n, pid, path, u, ctx->name);
             continue;
         }
 
@@ -411,6 +417,9 @@ ngx_rtmp_auto_push_reconnect(ngx_event_t *ev)
         if (ngx_parse_url(s->connection->pool, &at.url) != NGX_OK) {
             ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
                           "auto_push: auto-push parse_url failed "
+                          "url='%V' name='%s'",
+                          u, ctx->name);
+            INFO("auto_push: auto-push parse_url failed "
                           "url='%V' name='%s'",
                           u, ctx->name);
             continue;
@@ -424,6 +433,8 @@ ngx_rtmp_auto_push_reconnect(ngx_event_t *ev)
         ngx_log_debug4(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
                        "auto_push: connect slot=%i pid=%P socket='%s' name='%s'",
                        n, pid, path, ctx->name);
+        INFO("auto_push: connect slot=%i pid=%P socket='%s' name='%s'",
+              n, pid, path, ctx->name);
 
         if (ngx_rtmp_relay_push(s, &name, &at) == NGX_OK) {
             *slot = 1;
@@ -435,6 +446,9 @@ ngx_rtmp_auto_push_reconnect(ngx_event_t *ev)
                       "auto_push: connect failed: slot=%i pid=%P socket='%s'"
                       "url='%V' name='%s'",
                       n, pid, path, u, ctx->name);
+        INFO("auto_push: connect failed: slot=%i pid=%P socket='%s'"
+              "url='%V' name='%s'",
+              n, pid, path, u, ctx->name);
     }
 
     ccf = (ngx_core_conf_t *) ngx_get_conf(ngx_cycle->conf_ctx,
@@ -442,6 +456,9 @@ ngx_rtmp_auto_push_reconnect(ngx_event_t *ev)
 
     ngx_log_debug3(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
                    "auto_push: pushed=%i total=%i failed=%i",
+                   npushed, ccf->worker_processes,
+                   ccf->worker_processes - 1 - npushed);
+    INFO("auto_push: pushed=%i total=%i failed=%i",
                    npushed, ccf->worker_processes,
                    ccf->worker_processes - 1 - npushed);
 
@@ -465,6 +482,8 @@ ngx_rtmp_auto_push_reconnect(ngx_event_t *ev)
         ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
                       "auto_push: connect failed: slot=%i pid=%P name='%s'",
                       n, pid, ctx->name);
+        INFO("auto_push: connect failed: slot=%i pid=%P name='%s'",
+              n, pid, ctx->name);
     }
 
     if (!ctx->push_evt.timer_set) {

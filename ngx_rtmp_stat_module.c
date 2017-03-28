@@ -20,6 +20,7 @@
 
 #define DEBUG_LEVEL NGX_LOG_DEBUG
 #define DBG(fmt, args...) ngx_log_error(DEBUG_LEVEL, ngx_cycle->log, 0, "JUJU | " fmt, ##args)
+#define INFO(fmt, args...) ngx_log_error(NGX_LOG_INFO, ngx_cycle->log, 0, "%s " fmt, __FUNCTION__, ##args)
 
 int ngx_ipc_broadcast_alert(ngx_str_t *name, ngx_str_t *data);
 static ngx_int_t ngx_rtmp_stat_handler(ngx_http_request_t *r);
@@ -128,6 +129,7 @@ ngx_rtmp_stat_clear_stat_request(ngx_int_t conn_id) {
         }
     }
     if (r == NULL) {
+        INFO("request cid:%d not in map", conn_id);
         return;
     }
 
@@ -161,21 +163,21 @@ ngx_rtmp_stat_handle_stat(ngx_int_t conn_id, ngx_str_t *data) {
     }
 
     if (r == NULL) {
-        DBG("no active request with conn_id=%d was found", conn_id);
+        INFO("no active request with cid=%d was found", conn_id);
         r->error = NGX_ERROR;
         return;
     }
 
     s = ngx_alloc(sizeof(ngx_str_t), r->r->connection->log);
     if (s == NULL) {
-        DBG("can't allocate %ui bytes for ngx_str_t", sizeof(ngx_str_t));
+        INFO("can't allocate %ui bytes for ngx_str_t", sizeof(ngx_str_t));
         r->error = NGX_ERROR;
         return;// TODO: handle error
     }
     s->data = ngx_alloc(sizeof(u_char) * data->len, r->r->connection->log);
     if (s->data == NULL) {
         r->error = NGX_ERROR;
-        DBG("can't allocate %ui bytes to store worker stats", data->len);
+        INFO("can't allocate %ui bytes to store worker stats", data->len);
         return;// TODO: handle error
     }
     ngx_memcpy(s->data, data->data, data->len);
@@ -1099,7 +1101,7 @@ static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev) {
     ngx_http_request_t              *r;
     ngx_rtmp_stat_request_ctx_t     *ctx;
     ngx_rtmp_stat_request_t         *sr = NULL;
-    ngx_int_t                        i, rc;
+    ngx_int_t                        i, rc = NGX_ERROR;
     ngx_pool_t                      *pool;
 
     ngx_rtmp_core_main_conf_t       *cmcf;
@@ -1136,6 +1138,7 @@ static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev) {
 
     //TODO: replace hardcoded value with loc conf value
     if ((ngx_timeofday())->msec - ctx->timer_begin > 1000) {
+        INFO("stat broadcast timedout, diff=%ui", ((ngx_timeofday())->msec - ctx->timer_begin));
         ctx->state = state_rtmp_stat_timedout;
     }
     DBG("\t state %d", ctx->state);
@@ -1148,6 +1151,7 @@ static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev) {
 
     cmcf = ngx_rtmp_core_main_conf;
     if (cmcf == NULL) {
+        INFO("cmcf == NULL");
         goto error;
     }
 
@@ -1159,13 +1163,14 @@ static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev) {
 
     cl = ngx_alloc_chain_link(pool);
     if (cl == NULL) {
-        DBG("can't alloc chain link");
+        INFO("can't alloc chain link");
         goto error;
     }
 
     b = ngx_create_temp_buf(pool, len);
+    INFO("stat response len=%ui", len);
     if (b == NULL || b->pos == NULL) {
-        DBG("can't alloc temp buf");
+        INFO("can't alloc temp buf");
         goto error;
     }
     cl->next = NULL;
@@ -1185,6 +1190,7 @@ static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev) {
     r->headers_out.status = NGX_HTTP_OK;
     rc = ngx_http_send_header(r);
     if (rc != NGX_OK) {
+        INFO("header send error=%d, finalizing request", rc);
         ngx_http_finalize_request(r, rc);
         return;
     }
@@ -1193,6 +1199,7 @@ static void ngx_rtmp_stat_tick_handler(ngx_event_t *ev) {
     return;
 
 error:
+    INFO("clearing stat req after error=%d", rc);
     ngx_rtmp_stat_clear_stat_request(r->connection->fd);
 
     r->headers_out.status = NGX_HTTP_INTERNAL_SERVER_ERROR;
@@ -1210,7 +1217,6 @@ ngx_rtmp_stat_handler(ngx_http_request_t *r)
     ngx_rtmp_stat_request_ctx_t    *ctx;
     ngx_int_t                       rc;
 
-
     slcf = ngx_http_get_module_loc_conf(r, ngx_rtmp_stat_module);
     if (slcf->stat == 0) {
         return NGX_DECLINED;
@@ -1220,6 +1226,7 @@ ngx_rtmp_stat_handler(ngx_http_request_t *r)
     if (ctx == NULL) {
         ctx = ngx_rtmp_stat_create_request_ctx(r);
         if (ctx == NULL) {
+            INFO("couldn't create stat_request_ctx");
             return NGX_HTTP_INTERNAL_SERVER_ERROR;
         }
 
